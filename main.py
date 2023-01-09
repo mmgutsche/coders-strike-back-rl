@@ -233,13 +233,16 @@ class Pod:
 
     def update_cp(self, checkpoints: list[Vec2D]):
         """Updated timeout and next_cp_id if the pod passed a checkpoint."""
-        if self.pos.distance(checkpoints[self.next_cp_id]) < CHECKPOINT_RADIUS:
+        if self.checkpoint_reached(checkpoints):
             self.timeout = 0
             self.next_cp_id = (self.next_cp_id + 1) % len(checkpoints)
         else:
             self.timeout += 1
         if self.timeout >= 100:
             self.destroyed = True
+
+    def checkpoint_reached(self, checkpoints):
+        return self.pos.distance(checkpoints[self.next_cp_id]) < CHECKPOINT_RADIUS
 
     def finalize_move(self, checkpoints: list[Vec2D]):
         """Updates the pod after a move. Convenience method for move_pods."""
@@ -488,6 +491,7 @@ class GameEnvSingleRunner:
     def __init__(self):
         self.game_state = create_random_start_game_state(num_pods=1)
         self.counter = 0
+        self.max_timeout = 0
 
     def reset(self):
         self.game_state = create_random_start_game_state(num_pods=1)
@@ -519,14 +523,13 @@ class GameEnvSingleRunner:
         # calc distance to next cp
         checkpoints = self.game_state.checkpoints
         cp1 = checkpoints[racer.next_cp_id]
-        cp2 = checkpoints[(racer.next_cp_id + 1) % len(checkpoints)]
         dist_to_cp1 = racer.pos.distance(cp1) / MAP_WIDTH
         # the reward is the negative distance to the next checkpoint
         reward = -dist_to_cp1
-        if racer.timeout == 0 and self.counter > 0:
-            return 100
-        if racer.timeout == 100:
-            return -1000
+        self.max_timeout = max(self.max_timeout, racer.timeout)
+        if racer.checkpoint_reached(self.game_state.checkpoints):
+            reward = 1000 / self.max_timeout
+            self.max_timeout = 0
         return reward
 
     def step(self, action: int) -> EnvResponse:
