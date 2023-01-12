@@ -4,8 +4,8 @@ from dqn import DuellingDDQN_PRBAgent, D3QN_PRB_NStep, DQNVanilla, DDQNAgent, DD
 from main import GameEnvSingleRunner
 
 env = GameEnvSingleRunner()
-hidden_size = (16, 16)
-optim_kwargs = {"lr": 1e-2}
+hidden_size = (128,)
+optim_kwargs = {"lr": 1e-3}
 
 
 def eps_func_decay(episode):
@@ -23,10 +23,8 @@ def eps_func_linear(episode):
 
 
 agent = DDQN_PRBAgent(env, 0.9, hidden_size,
-                      minibatch=1024,
+                      minibatch=2024,
                       optim_kwargs=optim_kwargs,
                       history_length=1024,
-                      target_update_interval=200,
+                      target_update_interval=50,
                       eps_func=eps_func_decay)
-
-# agent = DQNVanilla(env, 0.99, hidden_size, minibatch=512, optim_kwargs=optim_kwargs)

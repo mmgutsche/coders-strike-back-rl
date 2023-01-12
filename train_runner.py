@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # create string from hyper params as f string
     hyper_params_str = f"{agent.__class__.__name__}_lr_{optim_kwargs['lr']}_batch_{agent.minibatch}_layers_{hidden_size}"
 
-    summary_writer = SummaryWriter(log_dir=f"tb_logs/{datetime.datetime.now():%D_%H%M%S}{hyper_params_str}")
+    summary_writer = SummaryWriter(log_dir=f"tb_logs/{datetime.datetime.now():%D-%m-%Y}/{hyper_params_str}")
     agent.summary_writer = summary_writer
     # agent.load_weights("weights/weights_900.pt")
     trainer = Trainer(env, agent, summary_writer=summary_writer)

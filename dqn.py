@@ -3,6 +3,7 @@ Different kind of DQNs
 vanilla DQN -> Q(s,a) = R + gamma * max[ Q(s_next, a_next')]
 Double DQN ->  Q(s,a) = R + gamma * Q'(s_next, argmax Q(s_next, a_next'))
 """
+from typing import Protocol
 
 import torch
 from torch import nn
@@ -25,18 +26,10 @@ NEXT_STATE = "next_state"
 DONE = "done"
 
 
-def eps_func_decay(episode):
-    rel_val = episode
-    decay_rate = 0.0025
-    eps = 1 * math.exp(-rel_val * decay_rate)
-    eps = max(eps, 0.05)
-    return eps
-
-
 class DQNVanilla(nn.Module):
     """ Deep Q-learning """
 
-    def __init__(self, env, gamma, hidden_sizes=(64,), activation=nn.ReLU(), n_steps=1, eps_func=None,
+    def __init__(self, env, gamma, hidden_sizes=(64,), activation=nn.ReLU(), n_steps=1, epsilon=0.3, epsilon_decay=0.99,
                  minibatch=64, summary_writer=None, optim_kwargs=None,
                  history_length=None, dtype=torch.float, device=torch.device("cpu")):
         super().__init__()
@@ -55,17 +48,12 @@ class DQNVanilla(nn.Module):
         self.summary_writer = summary_writer
         self.n_steps = n_steps  # for easier n_step inheritance
         self.minibatch = minibatch
-
-        self.eps_func = eps_func
-        if eps_func is None:
-            self.eps_func = eps_func_decay
-
+        self.eps = epsilon
         self.step = 0
-        self.eps = 0  # eps = 0 means always best learned action is chosen, eps = 1, means always random action is chosen
-
+        self.eps_decay = epsilon_decay
         self._setup_networks(hidden_sizes, activation)
 
-        # self._init_optimizer()
+    # self._init_optimizer()
 
     def _setup_networks(self, hidden_sizes, activation):
         self.dqn_net_local = MultiHeadedMLP(
@@ -80,8 +68,6 @@ class DQNVanilla(nn.Module):
             self.optimizer = torch.optim.Adam(params=self.parameters(), **optim_kwargs)
         self.dqn_net_local.train()
 
-        self.eps = self.eps_func(0)
-
     def _init_replay_buffer(self, history_length):
         self.history = History(max_length=history_length, dtype=self.dtype, device=self.device)
 
@@ -92,31 +78,27 @@ class DQNVanilla(nn.Module):
         self.history.store(**kwargs)
 
     def _finish_episode(self):
-        pass
+        ...
 
     def learn(self, state, reward, action, done, next_state, next_reward, episode_end, num_episode, *args, **kwargs):
 
         self.step += 1
 
         loss = 0
-        self.eps = self.eps_func(num_episode)
-        # if self.summary_writer is not None and done:
-        #     for i, k in enumerate(state):
-        #         self.summary_writer.add_scalar(f"debug/state_{i}_when_done", k, num_episode)
 
         if self.summary_writer is not None and episode_end:
             self.summary_writer.add_scalar("debug/eps", self.eps, num_episode)
         self._store(state=state, reward=reward, action=action, next_state=next_state, done=done)
 
         if len(self.history) > self._min_history_length():
-            loss = self._learn(num_episode, episode_end)
+            loss = self._learn()
 
         if done:
             self._finish_episode()
-
+        self.eps = max(self.eps * self.eps_decay, 0.01)
         return np.array([loss])
 
-    def _learn(self, num_episode, episode_end):
+    def _learn(self):
         """Update value parameters using given batch of experience tuples.
         Params
         =======
@@ -124,7 +106,6 @@ class DQNVanilla(nn.Module):
             gamma (float): discount factor
         """
         memory_idx, importance_sampling_weights, experiences = self.history.sample(n=self.minibatch)
-        # states, actions, rewards, next_state, dones = experiences
         experiences = self._prep_minibatch(experiences)  # non_final_next_states are only needed for n-step variants
 
         states = experiences[STATE]
@@ -139,10 +120,6 @@ class DQNVanilla(nn.Module):
         q_target = self._calc_reward(next_states, rewards, dones)
         q_eval = torch.squeeze(q_eval)
         q_target = torch.squeeze(q_target)
-
-        if self.summary_writer is not None and episode_end and num_episode % 10 == 0:
-            self.summary_writer.add_scalar("debug/bellman_target", q_target.max(), num_episode)
-            self.summary_writer.add_scalar("debug/bellman_eval", q_eval.max(), num_episode)
 
         # ------------------- update target network ------------------- #
         self._update_memory(q_eval.detach(), q_target.detach(), memory_idx)
@@ -181,7 +158,7 @@ class DQNVanilla(nn.Module):
         return loss
 
     def _update_memory(self, target_old, target, memory_idx):
-        pass
+        ...
 
     def _calc_reward(self, next_states, rewards, done):
         """
@@ -217,7 +194,6 @@ class DQNVanilla(nn.Module):
 
         """
 
-        # state = torch.from_numpy(state).unsqueeze(0)
         self.dqn_net_local.eval()
         with torch.no_grad():
             scores = self.dqn_net_local(state)[0]
@@ -273,14 +249,6 @@ class DQN_NStep_Agent(DQNVanilla):
         n_step_experience[NEXT_STATE] = kwargs[NEXT_STATE]
         self.history.store(**n_step_experience)
 
-    # def _prep_minibatch(self, experiences):
-    #     non_final_next_states = tuple(map(lambda s: s is not None, experiences[NEXT_STATE]))
-    #     assert np.sum(non_final_next_states) > 0
-    #     # for key, val in experiences.items():
-    #     #     experiences[key] = [x for i,x in enumerate(val) if is_non_final[i]] # hm looks clumsy, any better idea?
-    #     experiences = super()._prep_minibatch(experiences)
-    #     return experiences
-
     def _finish_episode(self):
         last_experience = self.n_step_buffer[-1]
         while len(self.n_step_buffer) > 0:
@@ -290,7 +258,7 @@ class DQN_NStep_Agent(DQNVanilla):
             n_step_experience[NEXT_STATE] = last_experience[NEXT_STATE]
             # check, technically done references to the current state, not the next state. But in calculations it makes
             # no difference, since it is only a mask to remove "invalid states"
-            # TODO check if needed at all, if we are not using memories at the end of an episode, why bother saving them? Only for q eval of current state?!
+            # check if needed at all, if we are not using memories at the end of an episode, why bother saving them? Only for q eval of current state?!
             n_step_experience[DONE] = True
             self.history.store(**n_step_experience)
 
@@ -364,19 +332,8 @@ class DQN_PRBAgent(DQNVanilla):
         loss = loss.mean()
         self.optimizer.zero_grad()
         loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.parameters(), grad_clip_value)
-        # if self.step % 200 == 0:
-
-        # for tag, param in self.dqn_net_local.modules().iteritems():#self.named_parameters():
-        #     if param.grad is not None:
-        #         self.summary_writer.add_histogram(tag, param.grad.data.cpu().numpy(), self.step)
-
-        # plot_grad_flow(self.named_parameters())
         self.optimizer.step()
         return loss
-
-    # def _min_history_length(self):
-    #     return self.history.tree.capacity
 
 
 class DuellingDQNAgent(DQNVanilla):

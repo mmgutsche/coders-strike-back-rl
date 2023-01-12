@@ -54,7 +54,7 @@ class Trainer:
         episode_length = 0
         loss = 0.0
 
-        state = self.env.reset()
+        state, _ = self.env.reset()
         state = torch.from_numpy(state).to(dtype=self.dtype, device=self.device)
         reward = 0.0
 
@@ -66,7 +66,7 @@ class Trainer:
             action, agent_info = self.agent(state)
             action_counter.append(action)
             # Environment step
-            next_state, next_reward, done, info = self.env.step(action)
+            next_state, next_reward, terminated, truncated, info = self.env.step(action)
             next_state = torch.from_numpy(next_state).to(dtype=self.dtype, device=self.device)
 
             # Replay buffer and model updates
@@ -74,10 +74,10 @@ class Trainer:
                 state=state,
                 reward=reward,
                 action=action,
-                done=done,
+                done=terminated,
                 next_state=next_state,
                 next_reward=next_reward,
-                episode_end=(done or episode_length == max_steps - 1),
+                episode_end=(terminated or truncated or episode_length == max_steps - 1),
                 num_episode=self.episode,
                 **agent_info,
                 **kwargs,
@@ -105,12 +105,12 @@ class Trainer:
                         action=action,
                         next_state=next_state,
                         next_reward=next_reward,
-                        done=done,
+                        done=terminated,
                         info=info,
                         agent_info=agent_info,
                     )
 
-            if done:
+            if terminated or truncated or episode_length == max_steps - 1:
                 break
 
         return episode_reward, episode_length + 1, loss, action_counter
@@ -127,7 +127,8 @@ class Trainer:
                 self.summary_writer.add_scalar(f"Performance/loss_sum", np.sum(losses[-1]), self.episode)
             self.summary_writer.add_scalar("Performance/max_reward", np.max(np.array(rewards)), self.episode)
             self.summary_writer.add_scalar("Performance/episode_length", lengths[-1], self.episode)
-            self.summary_writer.add_histogram("Debug/Actions", np.array(action_counter), self.episode)
+            # self.summary_writer.add_histogram("Debug/Actions", np.array(action_counter), self.episode)
+            self.summary_writer.add_scalar("Debug/eps", self.agent.eps, self.episode)
 
         # Progress bar
         pbar.set_description(

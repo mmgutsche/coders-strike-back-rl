@@ -20,6 +20,7 @@ MAX_THRUST = 200
 MAP_WIDTH = 16000
 MAP_HEIGHT = 9000
 POD_TIMEOUT = 100
+TIMEOUT = 1000
 FPS = 10
 
 
@@ -238,7 +239,7 @@ class Pod:
             self.next_cp_id = (self.next_cp_id + 1) % len(checkpoints)
         else:
             self.timeout += 1
-        if self.timeout >= 100:
+        if self.timeout >= TIMEOUT:
             self.destroyed = True
 
     def checkpoint_reached(self, checkpoints):
@@ -486,17 +487,17 @@ class GameEnvSingleRunner:
     """ Wrapper for training in CSB environment, provides state reset, and rewards"""
     ROTATE_MAPPING = {0: 0, 1: 90, 2: -90}
     action_space = ActionSpace(6)
-    observation_space = np.zeros((7,))
+    observation_space = np.zeros((9,))
 
     def __init__(self):
         self.game_state = create_random_start_game_state(num_pods=1)
         self.counter = 0
         self.max_timeout = 0
 
-    def reset(self):
+    def reset(self) -> tuple[np.array, dict]:
         self.game_state = create_random_start_game_state(num_pods=1)
         self.counter = 0
-        return self.get_state_as_numpy()
+        return self.get_state_as_numpy(), {}  # info is empty
 
     def get_state_as_numpy(self) -> np.array:
         """ Returns state as numpy array, by placing the racer at 0,0 and rotating other elements around it"""
@@ -505,15 +506,20 @@ class GameEnvSingleRunner:
         checkpoints = self.game_state.checkpoints
         cp1 = checkpoints[racer.next_cp_id]
         cp2 = checkpoints[(racer.next_cp_id + 1) % len(checkpoints)]
-        # transorm the checkpoints to be relative to the racer
 
-        cp1 = cp1 - racer.pos
-        cp2 = cp2 - racer.pos
-        # normalize angle
-        angle = racer.angle / 360
-        # normalize speed
+        return np.array([racer.pos.x, racer.pos.y,
+                         racer.vel.x, racer.vel.y, racer.angle,
+                         cp1.x, cp1.y, cp2.x, cp2.y])
 
-        return np.array([racer.vel.x, racer.vel.y, angle, cp1.x, cp1.y, cp2.x, cp2.y])
+    def checkpoint_reached_in_this_turn(self) -> bool:
+        """ Returns true if the racer has reached a checkpoint in this turn"""
+        racer = self.game_state.pods[0]
+        if racer.timeout > 0:
+            return False
+        if self.counter == 0:
+            return False
+        if racer.timeout == 0:
+            return True
 
     def calc_reward(self) -> float:
         """ Calculates the reward for the current state"""
@@ -522,14 +528,12 @@ class GameEnvSingleRunner:
         # if timeout is zero, we reached a checkpoint except for start of game
         # calc distance to next cp
         checkpoints = self.game_state.checkpoints
-        cp1 = checkpoints[racer.next_cp_id]
-        dist_to_cp1 = racer.pos.distance(cp1) / MAP_WIDTH
-        # the reward is the negative distance to the next checkpoint
-        reward = -dist_to_cp1
-        self.max_timeout = max(self.max_timeout, racer.timeout)
-        if racer.checkpoint_reached(self.game_state.checkpoints):
-            reward = 1000 / self.max_timeout
-            self.max_timeout = 0
+        # give positive reward if velocity vector is pointing towards next cp
+        # calc angle between velocity and cp1
+        reward = 0
+
+        if self.checkpoint_reached_in_this_turn():
+            reward += 100
         return reward
 
     def step(self, action: int) -> EnvResponse:
@@ -676,5 +680,5 @@ if __name__ == "__main__":
     from agent import agent
 
     agent = agent.to(torch.device("cpu"), torch.float)
-    agent.load_weights("weights/weights_final.pt")
+    agent.load_weights("weights/weights_latest.pt")
     main_test_game_env(agent)
